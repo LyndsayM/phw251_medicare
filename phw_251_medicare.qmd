@@ -16,33 +16,34 @@ Research Question: You have been asked to explore existing public data sources t
 ```{r, echo=FALSE, include=FALSE, warning=FALSE}
 library(tidyverse)
 library(readr)
+library(stringr)
 ```
 
 ```{r,  echo=FALSE, include=FALSE, warning=FALSE}
 #Milestone 2: Import data
-mortality <- read_csv("data/cdc_wonder_mortality.csv")
-population <- read_csv("data/cdc_wonder_population.csv")
+mort <- read_csv("data/cdc_wonder_mortality.csv")
+pop <- read_csv("data/cdc_wonder_population.csv")
 medicaid <-read_csv("data/kff_cms_medicaid_state_summary.csv")
 medicare <-read_csv("data/kff_cms_medicare_state_summary.csv")
 ```
 
-```{r}
+```{r, echo=FALSE, include=FALSE, warning=FALSE}
 #Milestone 2: Identify key data elements and their data type
-summary(mortality)
+summary(mort)
 #Residence State: Ten-Year Age Groups Code are all character data type
 #Deaths is a double/numeric
 #Range for Deaths (number of) is 10 to 16327
-unique(mortality$`Residence State`) #51 states + NA. REMOVE NA
-unique(mortality$`UCD - ICD Sub-Chapter`) #119 causes of mortality
-unique(mortality$`Ten-Year Age Groups`) #11 groups + NA
+unique(mort$`Residence State`) #51 states + NA. REMOVE NA
+unique(mort$`UCD - ICD Sub-Chapter`) #119 causes of mortality
+unique(mort$`Ten-Year Age Groups`) #11 groups + NA
 
-summary(population)
+summary(pop)
 #Range of population, 6738 to 5839642. Investigate 1 NA
 #State and 10-yr age groups are both character
 #State and state code need to be separated out
 
-unique(population$State) #51 + "NA". REMOVE NA
-unique(population$`Ten-Year Age Groups`) #11 + NA. Appears to be identical to groupings for mortality
+unique(pop$State) #51 + "NA". REMOVE NA
+unique(pop$`Ten-Year Age Groups`) #11 + NA. Appears to be identical to groupings for mortality
 
 summary(medicaid)
 #Multiple columns with numeric values ARE READING AS CHARACTER because the values have $ in them.
@@ -52,7 +53,6 @@ summary(medicaid)
 
 summary(medicare)
 #a couple of columns saved as characters should be numeric - same issue as with medicaid, remove $ and convert to numeric. 
-
 
 #Joining - can join all together by state name. Make sure all are named the same OR use state codes. Not all data sets have state codes. 
 #RENAME so that all state and state code names match for easier joining
@@ -64,11 +64,89 @@ summary(medicare)
 ```{r}
 #Milestone 2, task 2: clean each data set
 
+#1. clean mortality data
+mort_clean <- mort %>% 
+  rename_with( ~ tolower(gsub(" ", "_", .x, fixed = TRUE)))%>%
+  rename(ucd_icd_sub_chapter = `ucd_-_icd_sub-chapter`,
+         ucd_icd_sub_chapter_code = `ucd_-_icd_sub-chapter_code`,
+         age_groups = `ten-year_age_groups`,
+         age_groups_code = `ten-year_age_groups_code`,
+         state = residence_state,
+         state_code = residence_state_code)
+
+#2. clean population data
+pop_clean <- pop %>%
+  rename_with( ~ tolower(gsub(" ", "_", .x, fixed = TRUE)))%>%
+  rename(age_groups = `ten-year_age_groups`,
+         old_state = state)%>% 
+  mutate(state_code = str_sub(old_state, start = 1, end = 2),
+         state = str_sub(old_state, start = 4, end = -1))%>%
+  select(-old_state)
+
+#3. clean medicaid data
+medicaid_clean <- medicaid %>%
+  rename_with( ~ tolower(gsub(" ", "_", .x, fixed = TRUE))) %>%
+  rename(state = location)%>%
+  #remove $ signs
+  mutate(state = str_to_title(state),
+         seniors_spending = str_sub(seniors_spending, start = 2, end = -1),
+         individuals_with_disabilities_spending = 
+           str_sub(individuals_with_disabilities_spending, start = 2, end = -1),
+         adult_spending = str_sub(adult_spending, start =2, end = -1),
+         children_spending = str_sub(children_spending, start = 2, end = -1),
+         newly_eligible_adult_spending = 
+           str_sub(newly_eligible_adult_spending, start =2, end = -1),
+         total_spending = str_sub(total_spending, start = 2, end = -1),
+         #convert characters to numeric
+         across(2:7, ~as.numeric(.x, na.rm = T)),
+         newly_eligible_adult_enrollment = as.numeric(newly_eligible_adult_enrollment)) 
+
+#4. clean medicare data  
+medicare_clean <- medicare %>%
+  rename_with( ~ tolower(gsub(" ", "_", .x, fixed = TRUE))) %>%
+  rename(state = location)%>%
+  mutate(state = str_to_title(state),
+         #remove $$ signs
+         `total_medicare_part_a_and/or_part_b_program_payments` =
+           str_sub(`total_medicare_part_a_and/or_part_b_program_payments`, start = 2, end = -1),
+         `total_medicare_part_a_program_payments` =
+           str_sub(`total_medicare_part_a_program_payments`, start = 2, end = -1),
+         `total_medicare_part_b_program_payments` =
+           str_sub(`total_medicare_part_b_program_payments`, start = 2, end = -1),
+         #remove commas
+         `total_medicare_part_a_and/or_part_b_program_payments` =
+           str_remove_all(`total_medicare_part_a_and/or_part_b_program_payments`, ","),
+         `total_medicare_part_a_program_payments` =
+           str_remove_all(`total_medicare_part_a_program_payments`, ","),
+         `total_medicare_part_b_program_payments` =
+           str_remove_all(`total_medicare_part_b_program_payments`, ",")
+         )
+    
 ```
 
 
 ```{r}
 #Milestone 3
-#Choose an age category and mortality grouping of interest
+#Choose an age category and mortality grouping of interest - choosing ages 65-74 and "transport accidents" and "Other external causes of accidental injury"
+#choose at least 2 ICD sub-chapters
+
+#1. mortality data for ages 65-74, transport and accidental injuries
+mort_65 <- mort_clean %>%
+  filter(age_groups == "65-74 years",
+         ucd_icd_sub_chapter_code == c("V01-V99", "W00-X59"))
+#Create a new variable that includes a state level sum and summarize to only include one row per state
+mort_accident <- mort_65 %>%
+  group_by(state) %>% 
+  summarize(accident_deaths = sum(deaths))
+
+#2. population
+pop_65 <- pop_clean %>% 
+  #Create a new variable with population per state for the age group of interest and summarize to only include one row per state 
+  filter(age_groups == "65-74 years")
+
+
+
+
+#combine into a single state-level dataset
 ```
 
