@@ -8,7 +8,6 @@ Scenario: Mortality and Medicare services in the United States
 
 This scenario will utilize state-level mortality data for the United States (via CDC Wonder), population data by state and age group, and state-level Medicare enrollment and spending (via Center for Medicare Services and Kaiser Family Foundation). Teams will be asked to aggregate mortality data for a chosen category of cause of death and age group, calculate mortality rate for the specified cause and age group, and compare with a population-adjusted measure of Medicare utilization/enrollment.
 
-
 Description: You work for a non-profit organization that is focused on making recommendations for public health related policy changes. Your organization is working on defending a policy proposal that would increase funding to Medicare and Medicaid programs.
 
 Research Question: You have been asked to explore existing public data sources to determine if there is evidence of a correlation between mortality rates and health care expenditures in the United States. Additionally, you have been asked to highlight a few states that have higher mortality rates and lower public healthcare spending than other states.
@@ -99,7 +98,11 @@ medicaid_clean <- medicaid %>%
          total_spending = str_sub(total_spending, start = 2, end = -1),
          #convert characters to numeric
          across(2:7, ~as.numeric(.x, na.rm = T)),
-         newly_eligible_adult_enrollment = as.numeric(newly_eligible_adult_enrollment)) 
+         newly_eligible_adult_enrollment = as.numeric(newly_eligible_adult_enrollment),
+         ) 
+
+medicaid_clean <- medicaid_clean %>%
+  mutate(state = if_else(state == "District Of Columbia", "District of Columbia", state))
 
 #4. clean medicare data  
 medicare_clean <- medicare %>%
@@ -122,8 +125,9 @@ medicare_clean <- medicare %>%
            str_remove_all(`total_medicare_part_b_program_payments`, ",")
          )
 
+medicare_clean <- medicare_clean %>%
+  mutate(state = if_else(state == "District Of Columbia", "District of Columbia", state))    
 ```
-
 
 ```{r, echo=FALSE, include=FALSE, warning=FALSE}
 #Milestone 3
@@ -132,10 +136,12 @@ medicare_clean <- medicare %>%
 
 #1. mortality data for ages 65-74, transport and accidental injuries
 mort_65 <- mort_clean %>%
-  filter(age_groups == "65-74 years",
-         ucd_icd_sub_chapter_code == c("V01-V99", "W00-X59"))
+  filter(age_groups %in% c("65-74 years", "75-84 years", "85+years"),
+         ucd_icd_sub_chapter_code %in% c("V01-V99", "W00-X59")) %>% 
+  select(state, ucd_icd_sub_chapter, ucd_icd_sub_chapter_code, age_groups, age_groups_code, deaths)
+  
 #Create a new variable that includes a state level sum and summarize to only include one row per state
-mort_accident <- mort_65 %>%
+mort_tot_deaths <- mort_65 %>%
   group_by(state) %>% 
   summarize(accident_deaths = sum(deaths))
 
@@ -143,12 +149,18 @@ mort_accident <- mort_65 %>%
 pop_65 <- pop_clean %>% 
   #Create a new variable with population per state for the age group of interest and summarize to only include one row per state 
   filter(age_groups == "65-74 years")
+#there are 51 states
 
 #3. medicaid
 medicaid_65 <- medicaid_clean %>%
   select(state, seniors_spending, total_spending,
-         seniors_enrollment, total_enrollment)
-
+         seniors_enrollment, total_enrollment)%>%
+  rename(seniors_medicaid_spending = seniors_spending,
+         total_medicaid_spending = total_spending,
+         seniors_medicaid_enrollment = seniors_enrollment,
+         total_medicaid_enrollment = total_enrollment
+         )
+#there are 51 states
 #4. medicare
 #traditional vs. part a & b: traditional is part a only (requires no monthly premium). people that enroll in medicare are automatically enrolled in traditional. Part b requires monthly premium and you have to elect to accept or decline this coverage. You have to be enrolled in medicare parts A and B to be eligible to enroll in Medicare Advantage (data not included here). With MA you are choosing to have your Medicare benefit provided through a private plan.
 #part A covers hospital care (hospital care, hospice, home health care, and skilled nursing facility)
@@ -161,6 +173,39 @@ medicare_65 <- medicare_clean %>%
          total_medicare_payments = `total_medicare_part_a_and/or_part_b_program_payments`)%>%
   mutate(total_medicare_payments = as.numeric(total_medicare_payments),
          medicare_pay_per_util = total_medicare_payments/total_medicare_utilization)
-#combine into a single state-level dataset
+#all states present 
+
+#calculate the total population for each state
+tot_pop <- pop_clean %>% 
+  group_by(state) %>% 
+  summarize(tot_pop = sum(population))
 ```
 
+```{r}
+#combine into a single state-level dataset
+df_pop_mort <- mort_65 %>%
+  left_join(pop_65, by = c("state", "age_groups")) %>% 
+  select(-c("age_groups_code", "state_code", ucd_icd_sub_chapter_code)) %>% 
+  pivot_wider(names_from = c(age_groups, ucd_icd_sub_chapter), values_from = deaths) 
+
+df_pop_mort[is.na(df_pop_mort)] <- 0
+
+df_pop_mort <- df_pop_mort %>% 
+  group_by(state) %>% 
+  summarize(pop = sum(population),
+            #I did these below to get data into shape to join up with the other data set
+            transport_65_74 = sum(`65-74 years_Transport accidents`),
+            transport_75_84 = sum(`75-84 years_Transport accidents`),
+            other_acc_65_74 = sum(`65-74 years_Other external causes of accidental injury`),
+            other_acc_75_84 = sum(`75-84 years_Other external causes of accidental injury`))
+
+df_medicaid_care <- medicaid_65 %>% 
+  left_join(medicare_65, by = "state")
+
+df <- df_pop_mort %>% 
+  full_join(df_medicaid_care, by = "state")%>% 
+  group_by(state) %>% 
+  mutate(tot_deaths = sum(transport_65_74+transport_75_84+other_acc_65_74+other_acc_75_84))%>% 
+  left_join(tot_pop, by = "state")%>%
+  rename(senior_pop = pop)
+```
