@@ -61,7 +61,7 @@ summary(medicare)
 #TIME STAMP: 30 minutes
 ```
 
-```{r}
+```{r, echo=FALSE, include=FALSE, warning=FALSE}
 #Milestone 2, task 2: clean each data set
 
 #1. clean mortality data
@@ -121,11 +121,11 @@ medicare_clean <- medicare %>%
          `total_medicare_part_b_program_payments` =
            str_remove_all(`total_medicare_part_b_program_payments`, ",")
          )
-    
+
 ```
 
 
-```{r}
+```{r, echo=FALSE, include=FALSE, warning=FALSE}
 #Milestone 3
 #Choose an age category and mortality grouping of interest - choosing ages 65-74 and "transport accidents" and "Other external causes of accidental injury"
 #choose at least 2 ICD sub-chapters
@@ -144,9 +144,23 @@ pop_65 <- pop_clean %>%
   #Create a new variable with population per state for the age group of interest and summarize to only include one row per state 
   filter(age_groups == "65-74 years")
 
+#3. medicaid
+medicaid_65 <- medicaid_clean %>%
+  select(state, seniors_spending, total_spending,
+         seniors_enrollment, total_enrollment)
 
-
-
+#4. medicare
+#traditional vs. part a & b: traditional is part a only (requires no monthly premium). people that enroll in medicare are automatically enrolled in traditional. Part b requires monthly premium and you have to elect to accept or decline this coverage. You have to be enrolled in medicare parts A and B to be eligible to enroll in Medicare Advantage (data not included here). With MA you are choosing to have your Medicare benefit provided through a private plan.
+#part A covers hospital care (hospital care, hospice, home health care, and skilled nursing facility)
+#part B covers medical insurance (doctors visits, outpatient procedures, etc.)
+medicare_65 <- medicare_clean %>%
+  #I'm going to choose to look at just overall enrollment, utilization and payments at this point. 
+  select(1:4)%>%
+  rename(total_medicare_enrollees = `total_traditional_medicare_part_a_and/or_part_b_enrollees`,
+         total_medicare_utilization = `total_medicare_part_a_and/or_part_b_persons_with_utilization`,
+         total_medicare_payments = `total_medicare_part_a_and/or_part_b_program_payments`)%>%
+  mutate(total_medicare_payments = as.numeric(total_medicare_payments),
+         medicare_pay_per_util = total_medicare_payments/total_medicare_utilization)
 #combine into a single state-level dataset
 ```
 
