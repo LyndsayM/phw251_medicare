@@ -4,6 +4,8 @@ format: html
 editor: visual
 ---
 
+Instructions: https://bcourses.berkeley.edu/courses/1525339/pages/team-project#S3
+
 Scenario: Mortality and Medicare services in the United States
 
 This scenario will utilize state-level mortality data for the United States (via CDC Wonder), population data by state and age group, and state-level Medicare enrollment and spending (via Center for Medicare Services and Kaiser Family Foundation). Teams will be asked to aggregate mortality data for a chosen category of cause of death and age group, calculate mortality rate for the specified cause and age group, and compare with a population-adjusted measure of Medicare utilization/enrollment.
@@ -16,6 +18,7 @@ Research Question: You have been asked to explore existing public data sources t
 library(tidyverse)
 library(readr)
 library(stringr)
+library(plotly)
 ```
 
 ```{r,  echo=FALSE, include=FALSE, warning=FALSE}
@@ -159,7 +162,13 @@ medicaid_65 <- medicaid_clean %>%
          total_medicaid_spending = total_spending,
          seniors_medicaid_enrollment = seniors_enrollment,
          total_medicaid_enrollment = total_enrollment
-         )
+         )%>%
+  #Create a new variable for spending per enrollee for age group of interest
+  mutate(sr_medicaid_spend_per_enrollee = round(seniors_medicaid_spending/seniors_medicaid_enrollment,2),
+         tot_medicaid_spend_per_enrollee = total_medicaid_spending/total_medicaid_enrollment)
+```
+
+```{r, include=FALSE, echo=FALSE, warning=FALSE}
 #there are 51 states
 #4. medicare
 #traditional vs. part a & b: traditional is part a only (requires no monthly premium). people that enroll in medicare are automatically enrolled in traditional. Part b requires monthly premium and you have to elect to accept or decline this coverage. You have to be enrolled in medicare parts A and B to be eligible to enroll in Medicare Advantage (data not included here). With MA you are choosing to have your Medicare benefit provided through a private plan.
@@ -172,7 +181,8 @@ medicare_65 <- medicare_clean %>%
          total_medicare_utilization = `total_medicare_part_a_and/or_part_b_persons_with_utilization`,
          total_medicare_payments = `total_medicare_part_a_and/or_part_b_program_payments`)%>%
   mutate(total_medicare_payments = as.numeric(total_medicare_payments),
-         medicare_pay_per_util = total_medicare_payments/total_medicare_utilization)
+         #Create a new variable for spending per enrollee for age group of interest
+         medicare_spend_per_enrollee = total_medicare_payments/total_medicare_enrollees)
 #all states present 
 
 #calculate the total population for each state
@@ -205,7 +215,98 @@ df_medicaid_care <- medicaid_65 %>%
 df <- df_pop_mort %>% 
   full_join(df_medicaid_care, by = "state")%>% 
   group_by(state) %>% 
-  mutate(tot_deaths = sum(transport_65_74+transport_75_84+other_acc_65_74+other_acc_75_84))%>% 
   left_join(tot_pop, by = "state")%>%
-  rename(senior_pop = pop)
+  rename(senior_pop = pop) %>% 
+  mutate(
+    tot_deaths = sum(transport_65_74+transport_75_84+other_acc_65_74+other_acc_75_84),
+    #create a death rate per 100,000. I checked online and the calculated rate is not far off the rate listed by CDC, considering that this includes all seniors (rate goes up dramatically for older seniors)
+    death_rate = (tot_deaths/senior_pop)*100000,
+    death_rate = round(death_rate,2)
+                       )%>% 
+  select(state, 
+         senior_pop, tot_pop, 
+         transport_65_74, transport_75_84, 
+         other_acc_65_74, other_acc_75_84,
+         tot_deaths,
+         death_rate,
+         sr_medicaid_spend_per_enrollee, tot_medicaid_spend_per_enrollee,
+         seniors_medicaid_spending, seniors_medicaid_enrollment,
+         total_medicaid_spending, total_medicaid_enrollment
+         )
+
+df <- df %>% 
+  filter(!state %in% 'United States')
+
 ```
+
+```{r}
+#correlation: create visualizations to show if there is correlation between total mortality rate and health care expenditures
+#highlight a few states with the highest mortality rates and lowest public healthcare spending
+
+ggplot(data = df, aes(x=death_rate, y = sr_medicaid_spend_per_enrollee))+
+ geom_boxplot()
+  
+ggplot(data = df, aes(x=death_rate, y = sr_medicaid_spend_per_enrollee))+
+  geom_point()+
+  geom_smooth()
+
+library(stats)
+cor(x = df$death_rate, y = df$sr_medicaid_spend_per_enrollee, use = "complete.obs") #-0.0798
+
+#there doesn't appear to be a strong correlation. However, there are several outliers with much fewer deaths and much higher spending
+```
+
+```{r}
+library(plotly)
+
+p1 <- ggplot(data = df, aes(x=death_rate, y = sr_medicaid_spend_per_enrollee, fill=state))+
+  geom_point()+
+  geom_smooth()
+
+ggplotly(p1)
+
+#we could see what the correlation looks like if you remove North Dakota, Pennsylvania, and Minnesota
+```
+
+```{r}
+df_trimmed <- df %>%
+  filter(!state %in% c('North Dakota', 'Pennsylvania', 'Minnesota', 'United States'))
+
+p2 <- ggplot(data = df_trimmed, aes(x=death_rate, y = sr_medicaid_spend_per_enrollee, fill=state))+
+  geom_point()+
+  geom_smooth()
+
+ggplotly(p2)
+
+cor(x = df_trimmed$death_rate, y = df_trimmed$sr_medicaid_spend_per_enrollee, use = "complete.obs") #-0.0468. Even less of a correlation
+```
+
+```{r}
+#make a table. give each state an percentile indicator for death rate and for spending. pinpoint states with highest mortality rates and lowest spending
+library(kableExtra)
+df_table <- df %>% 
+  select(state, senior_pop, death_rate, sr_medicaid_spend_per_enrollee) 
+#using ntile to rank the 51 states & DC
+df_table$death_rank <- ntile(df_table$death_rate, 51)
+#reverse rank on spending to show states with lowest spend
+df_table$spend_rank <- ntile(-df_table$sr_medicaid_spend_per_enrollee, 51)
+df_table$comb_rank <- df_table$death_rank + df_table$spend_rank
+
+df_table <- df_table %>% 
+  arrange(desc(comb_rank)) %>% 
+  select(state, death_rank, spend_rank, comb_rank)
+
+kbl(df_table)
+
+#highlight a few states with the highest mortality rates and lowest public healthcare spending
+#states with a combined rank of high death and low spend: Kentucky, Wisconsin, Nevada, Mississippi, and New Mexico
+#states with a combined rank of lower death and higher spend: New York, New Jersey, North Dakota (they spend a lot), Massachusetts, and New Hampshire. North Dakota and Massachusetts were 2 of the outliers I noticed in my correlation plot.
+```
+
+```{r}
+#next: create a searchable table
+#create interactive boxplot and scatterplot
+#think about other visuals to tell the story.
+#what is the story here?
+```
+
